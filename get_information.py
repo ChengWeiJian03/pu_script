@@ -1,3 +1,4 @@
+import concurrent.futures
 import requests
 from lxml import etree
 import os
@@ -57,31 +58,23 @@ class Information:
         return hash_value
 
     def submit_button(self):
-        for active in self.apply_list:
-            params = {'app': 'event', 'mod': 'Front', 'act': 'doAddUser', 'id': f'{active.id}'}
-            data = {'__hash__': active.hash_value}
-            resp = requests.post('https://pocketuni.net/index.php', params=params, headers=self.headers, data=data)
-            if "人数已满" in resp.text:
-                console.print(f"活动 {active.name} 人数已满，报名失败,报名下一个", style="red")
-                continue
-            elif "操作太频繁" in resp.text:
-                console.print(f"活动 {active.name} 操作太频繁，报名失败,报名下一个", style="red")
-                continue
-            elif "报名成功" in resp.text:
-                console.print(f"成功提交报名：{active.name}", style="green")
-            else:
-                console.print(f"未知错误{active.name}", style="red")
-            resp.close()
+        if not self.apply_list:
+            console.print("抢课列表为空。", style="yellow")
+            return
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(self.submit_event, active) for active in self.apply_list]
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
+    def get_id_and_hash_event(self,active):
+        active.id = self.get_id_by_url(active.url)
+        active.hash_value = self.get_hash_by_id(active.id)
 
     def submit_activate_by_url(self):
-        
-        for active in self.apply_list:
-            if not active.id:
-                active.id = self.get_id_by_url(active.url)
-            active.hash_value = self.get_hash_by_id(active.id)
-        start_time = time.time()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(self.get_id_and_hash_event, active) for active in self.apply_list]
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
         self.submit_button()
-        print(f"submit{time.time() - start_time:.2f}秒")
 
     def get_id_by_url(self, url):
         parsed_url = urlparse(url)
@@ -94,7 +87,21 @@ class Information:
             matches = self.re_expression.activity_name.findall(resp.text)
             activate_name = matches[0] if matches else activate_name
         return activate_name
-
+    
+    def submit_event(self, active):
+        active.hash_value = self.get_hash_by_id(active.id)
+        params = {'app': 'event', 'mod': 'Front', 'act': 'doAddUser', 'id': f'{active.id}'}
+        data = {'__hash__': active.hash_value}
+        resp = requests.post('https://pocketuni.net/index.php', params=params, data=data,headers=self.headers)
+        if "人数已满" in resp.text:
+            console.print(f"活动 {active.name} 人数已满，报名失败。", style="red")
+        elif "操作太频繁" in resp.text:
+            console.print(f"活动 {active.name} 操作太频繁，报名失败。", style="red")
+        elif "报名成功" in resp.text:
+            console.print(f"成功提交报名：{active.name}", style="green")
+        else:
+            console.print(f"未知错误：{active.name}", style="red")
+        resp.close()
     def get_search_activate_urls(self, start_page=1, end_page=5, keyword="三江讲堂"):
         self.activate_info_urls = []
         for pages in range(start_page, end_page + 1):
@@ -150,7 +157,7 @@ class Information:
                 break
 
             for idx, url in enumerate(self.activate_info_urls, start=1):
-                console.print(f"正在获取第{idx}个活动信息")
+                console.print(f"正在获取第{idx}个活动信息", style="yellow")
                 remaining_spots = self.get_remaining_spots_inside(url)
                 if remaining_spots == "0" and False:
                     continue  # 跳过已满的活动
@@ -270,3 +277,4 @@ if __name__ == "__main__":
         
     while True:
         imf.submit_activate_by_url()
+        time.sleep(5)
